@@ -5,11 +5,9 @@ import zlib
 import string
 import random
 from collections import Counter, defaultdict
-import message_queue
 
 
 NIL = None
-
 
 
 def get_value():
@@ -26,7 +24,7 @@ def get_value():
 
 
 class TendermintNode:
-    def __init__(self, node_id, num_nodes, message_queue, scheduler, verbose=False):
+    def __init__(self, node_id, num_nodes, round_time, message_queue, scheduler, verbose=False):
         # Using variable names from https://arxiv.org/pdf/1807.04938, page 7
         # current height, or consensus instance we are currently executing
         self.h = 0
@@ -45,22 +43,29 @@ class TendermintNode:
         ##########
         self.node_id = node_id
         self.num_nodes = num_nodes
+        self.round_time = round_time
+        self.start_time = time.time()
         # From the paper: "for simplicity we present the algorithm for the case n = 3f + 1"
         self.f = (num_nodes - 1) / 3
         assert self.f == int(self.f), "(num_nodes-1) must be divisble by 3!"
         self.message_queue = message_queue
         self.scheduler = scheduler
 
-        # Paper description involves storing all messages sent and received in a message log
-        # We'll store the information we need in these dicts
+        # Paper description involves storing all messages sent and received in a 
+        # message log.  Instead we'll store information we need in these dicts
+        # (h, round) -> {"proposal": ..., "valid_round": ...}
         self.proposals = {}
-        # Nested dict store all our votes: round -> node_id -> block_hash
+        # (h, round) -> node_id -> id(v) (aka block_hash)
         self.prevotes = defaultdict(dict)
         self.precommits = defaultdict(dict)
 
         # node_ids of other nodes, we'll use this for broadcasting
         self.peers = []
         self.verbose = verbose
+
+    def print_blocks(self):
+        blocks = [self.decision.get(i) for i in range(self.h)]
+        print(f"{self.node_id} BLOCKS: {blocks}")
 
     def add_peer(self, peer_id):
         """
@@ -134,7 +139,6 @@ class TendermintNode:
         key is the node_id, value is their vote in id_(v) format
         """
         votes = Counter(votes_dict.values())
-        print("VOTES", votes, "THRESHOLD", 2 * self.f + 1)
         qc = [x for x in votes if votes[x] >= (2 * self.f + 1)]
         if qc:
             # Can only ever have one QC, so return [0]
@@ -178,7 +182,8 @@ class TendermintNode:
             "height": h,
             "round": round,
         }
-        self.schedule(msg, time.time() + 5)
+        timeout_time = self.start_time + (round +1 ) * self.round_time
+        self.schedule(msg, timeout_time)
 
     def schedule_ontimeout_prevote(self, h, round):
         msg = {
@@ -186,7 +191,8 @@ class TendermintNode:
             "height": h,
             "round": round,
         }
-        self.schedule(msg, time.time() + 5)
+        timeout_time = self.start_time + (round +1 ) * self.round_time
+        self.schedule(msg, timeout_time)
 
     def schedule_ontimeout_precommit(self, h, round):
         msg = {
@@ -194,7 +200,8 @@ class TendermintNode:
             "height": h,
             "round": round,
         }
-        self.schedule(msg, time.time() + 5)
+        timeout_time = self.start_time + (round +1 ) * self.round_time
+        self.schedule(msg, timeout_time)
 
     def start_round(self, round):
         """
@@ -216,8 +223,10 @@ class TendermintNode:
             
             #  In addition to the value proposed, the PROPOSAL message also contains the validRound so other processes are informed about the last round in which the proposer observed validV alue as a possible decision value.
             self.broadcast_proposal(self.h, round, proposal, self.valid_round)
+            # We'll run our own prevote because we'lll call 'handle_proposal" on ourself
             # At this point we meet the conditions to run lines 22-27, so do that here
-            self.broadcast_prevote(self.h, round, self.id_(proposal))
+            # print(self.node_id, "PREVOTE Z")
+            # self.broadcast_prevote(self.h, round, self.id_(proposal))
             self.step = "prevote"
         else:
             self.schedule_ontimeout_proposal(self.h, self.round)
@@ -229,8 +238,6 @@ class TendermintNode:
         # Storing it in a message log
         assert (h, round) not in self.proposals, "Shouldn't receive multiple proposals!"
         self.proposals[(h, round)] = {"proposal": proposal, "valid_round": valid_round}
-
-        print("HANDLE PROPOSAL CHECK...")
         if valid_round == -1:
             if self.valid(proposal) and (self.locked_round == -1 or self.locked_value == proposal):
                 self.broadcast_prevote(h, round, self.id_(proposal))
@@ -241,11 +248,10 @@ class TendermintNode:
 
     def handle_prevote(self, sender, h, round, id_v):
         ## lines 34-35
-        assert sender not in self.prevotes[round], "Shouldn't receive multiple prevotes!"
-        self.prevotes[round][sender] = id_v
-        num_prevotes = len(self.prevotes[round])
-        have_qc, qc_idv = self._tally_votes(self.prevotes[round])
-        print("HAVE QC?", have_qc)
+        assert sender not in self.prevotes[(h, round)], "Shouldn't receive multiple prevotes!"
+        self.prevotes[(h, round)][sender] = id_v
+        num_prevotes = len(self.prevotes[(h, round)])
+        have_qc, qc_idv = self._tally_votes(self.prevotes[(h, round)])
 
         ## lines 28-33
 
@@ -299,10 +305,10 @@ class TendermintNode:
         """
         # Can they ever vote more than once in a round?
         # Should we add assertion that they haven't voted yet?
-        assert sender not in self.precommits[round], "Shouldn't receive multiple precommits!"
-        self.precommits[round][sender] = id_v
-        num_precommits = len(self.precommits[round])
-        have_qc, qc_idv = self._tally_votes(self.precommits[round])
+        assert sender not in self.precommits[(h, round)], "Shouldn't receive multiple precommits!"
+        self.precommits[(h, round)][sender] = id_v
+        num_precommits = len(self.precommits[(h, round)])
+        have_qc, qc_idv = self._tally_votes(self.precommits[(h, round)])
 
         # Upon 2f+1 votes
         # Only do it once!
@@ -313,8 +319,8 @@ class TendermintNode:
             proposal = self.proposals[(h, round)]["proposal"]
             # Make sure it matches what we have for our proposal
             if self.valid(proposal) and qc_idv == self.id_(proposal):
-                blocks = [self.decision.get(i) for i in range(h)]
-                print("FINALIZED BLOCK!!!!!!!!!", blocks)
+                if self.verbose:
+                    self.print_blocks()
 
                 self.decision[h] = proposal
                 self.h += 1
@@ -345,6 +351,7 @@ class TendermintNode:
         If things are going well, this condition will NOT be met, and we won't
         broadcast a nil prevote here
         """
+        print("PROPOPSE TIMEOUT")
         if height == self.h and round == self.round and self.step == "propose":
             self.broadcast_prevote(height, round, NIL)
             self.step = "prevote"
@@ -353,6 +360,7 @@ class TendermintNode:
         """
         ## lines 61-64
         """
+        print("PREVOTE TIMEOUT")
         if height == self.h and round == self.round and self.step == "prevote":
             self.broadcast_precommit(height, round, NIL)
             self.step = "precommit"
@@ -361,29 +369,7 @@ class TendermintNode:
         """
         ## lines 65-67
         """
+        print("PRECOMMIT TIMEOUT")
         if height == self.h and round == self.round:
             self.start_round(round + 1)
 
-
-if __name__ == "__main__":
-    n = 4
-
-    nodes = {}
-    message_queue = message_queue.MessageQueue(nodes)
-
-    for i in range(n):
-        node = TendermintNode(i, n, message_queue, message_queue)
-        nodes[i] = node
-
-    threads = []
-    for i in range(n):
-        for j in range(n):
-            if i == j:
-                continue
-            nodes[i].add_peer(j)
-
-    for i in nodes:
-        # Start them off...
-        nodes[i].start_round(0)
-
-    message_queue.run()

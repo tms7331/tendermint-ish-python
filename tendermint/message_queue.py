@@ -13,10 +13,15 @@ class QSchedule:
         if not self.q_sched.empty() and self.q_sched.queue[0][2] < time.time():
             (node, message, _) = self.q_sched.get()
             return (node, message)
-        # If q_now is ever empty, we'll hang forever because program is single threaded
-        # With our implementation this should never be empty
-        assert not self.q_now.empty(), "Empty queue!  Program stuck"
-        return self.q_now.get()
+        # If we have a normal message - process it, otherwise wait for the timeout message
+        if not self.q_now.empty():
+            return self.q_now.get()
+        else:
+            assert not self.q_sched.empty(), "Empty queue!  Program stuck"
+            schedule_time = self.q_sched.queue[0][2]
+            time.sleep(schedule_time - time.time())
+            (node, message, _) = self.q_sched.get()
+            return (node, message)
 
     def put(self, node, message, scheduled_time):
         """
@@ -52,7 +57,6 @@ class MessageQueue:
         """
         Just adds it to queue
         """
-        print("SENDING MESSAGE", node, message)
         self.q.put(node, message, 0)
 
     def schedule_message(self, node, message, scheduled_time):
@@ -63,7 +67,7 @@ class MessageQueue:
         self.q.put(node, message, scheduled_time)
 
     def process_message(self, node, message):
-        print("PROCESS", node, message)
+        # print("PROCESS", node, message)
         self.nodes[node].process_message(message)
 
     def safety_check(self):
@@ -73,17 +77,25 @@ class MessageQueue:
         # Every node should generally be on the same round, and 'round' upper bounds height
         round = self.nodes[0].round
         for i in range(0, round):
-            decisions = {x.decision.get(i, None) for x in self.nodes}
+            decisions = {self.nodes[x].decision.get(i, None) for x in self.nodes}
             # It's ok if some blocks have fallen behind and have NIL/None
             if None in decisions:
                 decisions.remove(None)
             if len(decisions) > 1:
                 dec_all = list(decisions)
                 print("####### SAFETY VIOLATION!!! #######")
+                # First print all blocks, then print specific information about violation
+                for x in self.nodes:
+                    self.nodes[x].print_blocks()
                 for dec in dec_all:
-                    matches = [
-                        x.node_id for x in self.nodes if x.decision.get(i, None) == dec
-                    ]
+                    # matches = [
+                    #     x.node_id for x in self.nodes if x.decision.get(i, None) == dec
+                    # ]
+                    matches = {
+                        self.nodes[i].node_id
+                        for i in self.nodes
+                        if self.nodes[i].decision.get(i, None) == dec
+                    }
                     print(f"NODES {matches} BLOCK HEIGHT {i} VALUE {dec}")
                 raise Exception("Safety Violation!")
 
@@ -92,8 +104,8 @@ class MessageQueue:
         If we went go through every node as a proposer and no block was created, we'll
         call it a liveness violation (even though in reality it's more subtle than this)
         """
-        block_height = max([len(x.decision) for x in self.nodes])
-        round = max([len(x.round) for x in self.nodes])
+        block_height = max([len(self.nodes[x].decision) for x in self.nodes])
+        round = max([self.nodes[x].round for x in self.nodes])
 
         new_blocks = block_height - self.block_height
         rounds_passed = round - self.round
