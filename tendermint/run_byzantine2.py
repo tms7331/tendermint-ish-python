@@ -59,10 +59,10 @@ nodes = {}
 mq = message_queue.MessageQueue(nodes)
 
 byzantine_nodes = {2, 3}
-round_time = 5
+round_time = 3
 
 for i in range(n):
-    verbose = True if i == 1 else False
+    verbose = True if i == 2 else False
     if i in byzantine_nodes:
         node = TendermintNodeByzantineRandom(i, n, round_time, mq, mq, verbose)
     else:

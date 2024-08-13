@@ -24,7 +24,9 @@ def get_value():
 
 
 class TendermintNode:
-    def __init__(self, node_id, num_nodes, round_time, message_queue, scheduler, verbose=False):
+    def __init__(
+        self, node_id, num_nodes, round_time, message_queue, scheduler, verbose=False
+    ):
         # Using variable names from https://arxiv.org/pdf/1807.04938, page 7
         # current height, or consensus instance we are currently executing
         self.h = 0
@@ -51,7 +53,7 @@ class TendermintNode:
         self.message_queue = message_queue
         self.scheduler = scheduler
 
-        # Paper description involves storing all messages sent and received in a 
+        # Paper description involves storing all messages sent and received in a
         # message log.  Instead we'll store information we need in these dicts
         # (h, round) -> {"proposal": ..., "valid_round": ...}
         self.proposals = {}
@@ -78,9 +80,11 @@ class TendermintNode:
         """
         all to all communication
         """
-        for p in self.peers:
+        if self.verbose:
+            print(self.node_id, "sending:", msg)
+        for to_node_id in self.peers:
             # copying messages so we can pop the msg_type
-            self.message_queue.send_message(p, dict(msg))
+            self.message_queue.send_message(to_node_id, dict(msg))
         # Algorithm also calls for storing our own messages in the message log
         # We can accomplish this by processing our own message
         self.process_message(msg)
@@ -90,7 +94,7 @@ class TendermintNode:
 
     def process_message(self, msg):
         if self.verbose:
-            print(self.node_id, "process_message received:", msg)
+            print(self.node_id, "received:", msg)
         handler_map = {
             "PROPOSAL": self.handle_proposal,
             "PREVOTE": self.handle_prevote,
@@ -116,10 +120,10 @@ class TendermintNode:
 
     def valid(self, v):
         """
-        Returns whether or not a block is valid.  'get_value' returns a 4 
+        Returns whether or not a block is valid.  'get_value' returns a 4
         character string, so we'll treat any 4 character string as valid
         """
-        return isinstance(v, str) and len(v)==4
+        return isinstance(v, str) and len(v) == 4
 
     def id_(self, v):
         """
@@ -135,7 +139,7 @@ class TendermintNode:
 
     def _tally_votes(self, votes_dict):
         """
-        Input is a dictionary of votes for a given round, 
+        Input is a dictionary of votes for a given round,
         key is the node_id, value is their vote in id_(v) format
         """
         votes = Counter(votes_dict.values())
@@ -182,7 +186,8 @@ class TendermintNode:
             "height": h,
             "round": round,
         }
-        timeout_time = self.start_time + (round +1 ) * self.round_time
+        timeout_time = self.start_time + (round + 1) * self.round_time
+        assert timeout_time > time.time()
         self.schedule(msg, timeout_time)
 
     def schedule_ontimeout_prevote(self, h, round):
@@ -191,7 +196,7 @@ class TendermintNode:
             "height": h,
             "round": round,
         }
-        timeout_time = self.start_time + (round +1 ) * self.round_time
+        timeout_time = self.start_time + (round + 1) * self.round_time
         self.schedule(msg, timeout_time)
 
     def schedule_ontimeout_precommit(self, h, round):
@@ -200,33 +205,33 @@ class TendermintNode:
             "height": h,
             "round": round,
         }
-        timeout_time = self.start_time + (round +1 ) * self.round_time
+        timeout_time = self.start_time + (round + 1) * self.round_time
         self.schedule(msg, timeout_time)
 
     def start_round(self, round):
         """
         ## lines 11-21
         """
+        if self.verbose:
+            print(f"\n{self.node_id} --- STRTING ROUND {round}")
         self.round = round
         self.step = "propose"
 
         if self.proposer(self.h, self.round) == self.node_id:
-            """
-            If in the previous round we saw a prevote QC, but NOT a precommit QC,
-            we will not have cleared the 'valid_value' from the previous round, 
-            so we will reuse that value.  Otherwise we'll propose a new block/value
-            """
+            # If in the previous round we saw a prevote QC, but NOT a precommit QC,
+            # we will not have cleared the 'valid_value' from the previous round,
+            # so we will reuse that value.  Otherwise we'll propose a new block/value
             if self.valid_value is not NIL:
                 proposal = self.valid_value
             else:
                 proposal = get_value()
-            
-            #  In addition to the value proposed, the PROPOSAL message also contains the validRound so other processes are informed about the last round in which the proposer observed validV alue as a possible decision value.
+
+            # In addition to the value proposed, the PROPOSAL message also contains
+            # the validRound so other processes are informed about the last round
+            # in which the proposer observed validV alue as a possible decision value.
             self.broadcast_proposal(self.h, round, proposal, self.valid_round)
-            # We'll run our own prevote because we'lll call 'handle_proposal" on ourself
-            # At this point we meet the conditions to run lines 22-27, so do that here
-            # print(self.node_id, "PREVOTE Z")
-            # self.broadcast_prevote(self.h, round, self.id_(proposal))
+            # Note that when we broadcast_proposal, it will call a function
+            # to prevote for this value
             self.step = "prevote"
         else:
             self.schedule_ontimeout_proposal(self.h, self.round)
@@ -235,20 +240,26 @@ class TendermintNode:
         ## lines 22-27
         assert sender == self.proposer(h, round)
 
-        # Storing it in a message log
-        assert (h, round) not in self.proposals, "Shouldn't receive multiple proposals!"
+        assert (
+            h,
+            round,
+        ) not in self.proposals, f"Shouldn't receive multiple proposals! Round {round}, TO {self.node_id} FROM {sender}"
         self.proposals[(h, round)] = {"proposal": proposal, "valid_round": valid_round}
         if valid_round == -1:
-            if self.valid(proposal) and (self.locked_round == -1 or self.locked_value == proposal):
+            if self.valid(proposal) and (
+                self.locked_round == -1 or self.locked_value == proposal
+            ):
                 self.broadcast_prevote(h, round, self.id_(proposal))
             else:
                 self.broadcast_prevote(h, round, NIL)
             self.step = "prevote"
 
-
     def handle_prevote(self, sender, h, round, id_v):
         ## lines 34-35
-        assert sender not in self.prevotes[(h, round)], "Shouldn't receive multiple prevotes!"
+        assert (
+            sender not in self.prevotes[(h, round)]
+        ), f"Shouldn't receive multiple prevotes! Round {round}, TO {self.node_id} FROM {sender}"
+
         self.prevotes[(h, round)][sender] = id_v
         num_prevotes = len(self.prevotes[(h, round)])
         have_qc, qc_idv = self._tally_votes(self.prevotes[(h, round)])
@@ -260,25 +271,25 @@ class TendermintNode:
         If we see proposal for a different round we won't prevote in response
         to the proposal, but if enough people vote we can be overruled?
         """
-        valid_round = self.proposals[(h, round)]["valid_round"]
-        proposal = self.proposals[(h, round)]["proposal"]
 
-        if have_qc and self.step == "propose" and valid_round >= 0 and valid_round < self.round:
-            if self.valid(proposal) and (
-                self.locked_round <= valid_round or self.locked_value == proposal
-            ):
-                self.broadcast_prevote(h, round, self.id_(proposal))
-            else:
-                self.broadcast_prevote(h, round, NIL)
-            self.step = "prevote"
+        if have_qc and self.step == "propose":
+            valid_round = self.proposals[(h, round)]["valid_round"]
+            proposal = self.proposals[(h, round)]["proposal"]
+            if valid_round >= 0 and valid_round < self.round:
+                if self.valid(proposal) and (
+                    self.locked_round <= valid_round or self.locked_value == proposal
+                ):
+                    self.broadcast_prevote(h, round, self.id_(proposal))
+                else:
+                    self.broadcast_prevote(h, round, NIL)
+                self.step = "prevote"
 
-        ## lines 34-35 
+        ## lines 34-35
         if self.step == "prevote":
             # Upon 2f+1
             # By checking for exact count we'll only do it once!
             if num_prevotes == (2 * self.f + 1):
                 self.schedule_ontimeout_prevote(h, round)
-
 
         ## lines 36-43
         if have_qc and self.step in {"prevote", "precommit"}:
@@ -298,14 +309,16 @@ class TendermintNode:
             self.broadcast_precommit(h, round, NIL)
             self.step = "precommit"
 
-
     def handle_precommit(self, sender, h, round, id_v):
         """
         ## lines 49-55
         """
         # Can they ever vote more than once in a round?
         # Should we add assertion that they haven't voted yet?
-        assert sender not in self.precommits[(h, round)], "Shouldn't receive multiple precommits!"
+        assert (
+            sender not in self.precommits[(h, round)]
+        ), f"Shouldn't receive multiple prevotes! Round {round}, TO {self.node_id} FROM {sender}"
+
         self.precommits[(h, round)][sender] = id_v
         num_precommits = len(self.precommits[(h, round)])
         have_qc, qc_idv = self._tally_votes(self.precommits[(h, round)])
@@ -328,9 +341,7 @@ class TendermintNode:
                 self.locked_value = NIL
                 self.valid_round = -1
                 self.valid_value = NIL
-                self.start_round(round+1)
-
-
+                self.start_round(round + 1)
 
     # TODO - need this!
     # lines 55-59
@@ -351,7 +362,6 @@ class TendermintNode:
         If things are going well, this condition will NOT be met, and we won't
         broadcast a nil prevote here
         """
-        print("PROPOPSE TIMEOUT")
         if height == self.h and round == self.round and self.step == "propose":
             self.broadcast_prevote(height, round, NIL)
             self.step = "prevote"
@@ -360,7 +370,6 @@ class TendermintNode:
         """
         ## lines 61-64
         """
-        print("PREVOTE TIMEOUT")
         if height == self.h and round == self.round and self.step == "prevote":
             self.broadcast_precommit(height, round, NIL)
             self.step = "precommit"
@@ -369,7 +378,5 @@ class TendermintNode:
         """
         ## lines 65-67
         """
-        print("PRECOMMIT TIMEOUT")
         if height == self.h and round == self.round:
             self.start_round(round + 1)
-

@@ -150,8 +150,7 @@ round_time = 0.5
 collusion_tracker = CollusionTracker(byzantine_nodes)
 
 for i in range(n):
-    verbose = True
-    verbose = True if i == 2 else False
+    verbose = True if i == 0 else False
     if i in byzantine_nodes:
         node = TendermintNodeByzantineCollude(
             i, n, round_time, mq, mq, collusion_tracker, verbose
