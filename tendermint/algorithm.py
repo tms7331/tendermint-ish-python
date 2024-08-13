@@ -309,6 +309,11 @@ class TendermintNode:
             self.broadcast_precommit(h, round, NIL)
             self.step = "precommit"
 
+        ##  lines 55-59
+        # If we start getting votes for future round, we need to start it!
+        if num_prevotes == (2 * self.f + 1) and round > self.round:
+            self.start_round(round)
+
     def handle_precommit(self, sender, h, round, id_v):
         """
         ## lines 49-55
@@ -343,11 +348,10 @@ class TendermintNode:
                 self.valid_value = NIL
                 self.start_round(round + 1)
 
-    # TODO - need this!
-    # lines 55-59
-    # If we start getting votes for future round, we need to start it!
-    # upon f + 1 h∗, hp, round, ∗, ∗i with round > roundp do
-    #     StartRound(round)
+        ##  lines 55-59
+        # If we start getting votes for future round, we need to start it!
+        if num_precommits == (2 * self.f + 1) and round > self.round:
+            self.start_round(round)
 
     def on_timeout_proposal(self, height, round):
         """
