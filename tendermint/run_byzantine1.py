@@ -53,17 +53,6 @@ class TendermintNodeByzantineCollude(algorithm.TendermintNode):
         super().__init__(node_id, num_nodes, round_time, mq, scheduler, verbose)
         self.collusion_tracker = collusion_tracker
 
-    def broadcast_malicious(self, nodes, msg):
-        """
-        all to all communication
-        """
-        for p in nodes:
-            # copying messages so we can pop the msg_type
-            self.message_queue.send_message(p, dict(msg))
-        # Algorithm also calls for storing our own messages in the message log
-        # We can accomplish this by processing our own message
-        self.process_message(msg)
-
     def broadcast_proposal(self, h, round, proposal, valid_round):
         """
         So if it's our turn to propose, we'll propose one block to half the nodes
@@ -97,7 +86,7 @@ class TendermintNodeByzantineCollude(algorithm.TendermintNode):
             "proposal": proposal,
             "valid_round": valid_round,
         }
-        for to_node_id in nodes:
+        for to_node_id in self.peers:
             if to_node_id in send_alt:
                 continue
             self.message_queue.send_message(to_node_id, dict(msg))
@@ -161,8 +150,8 @@ round_time = 0.5
 collusion_tracker = CollusionTracker(byzantine_nodes)
 
 for i in range(n):
-    verbose = True if i == 0 else False
     verbose = True
+    verbose = True if i == 2 else False
     if i in byzantine_nodes:
         node = TendermintNodeByzantineCollude(
             i, n, round_time, mq, mq, collusion_tracker, verbose
