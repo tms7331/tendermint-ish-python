@@ -1,42 +1,13 @@
-import queue
 import time
-
-
-class QSchedule:
-    def __init__(self):
-        self.q_now = queue.Queue()
-        self.q_sched = queue.Queue()
-
-    def get(self):
-        # If we're past the time for the scheduled queue, get that
-        # otherwise pull from q_now
-        if not self.q_sched.empty() and self.q_sched.queue[0][2] < time.time():
-            (node, message, _) = self.q_sched.get()
-            return (node, message)
-        # If we have a normal message - process it, otherwise wait for the timeout message
-        if not self.q_now.empty():
-            return self.q_now.get()
-        else:
-            assert not self.q_sched.empty(), "Empty queue!  Program stuck"
-            schedule_time = self.q_sched.queue[0][2]
-            time.sleep(schedule_time - time.time())
-            (node, message, _) = self.q_sched.get()
-            return (node, message)
-
-    def put(self, node, message, scheduled_time):
-        """
-        Just adds it to queue
-        """
-        if scheduled_time:
-            self.q_sched.put((node, message, scheduled_time))
-        else:
-            self.q_now.put((node, message))
+from queue import PriorityQueue
 
 
 class MessageQueue:
     def __init__(self, nodes):
         self.nodes = nodes
-        self.q = QSchedule()
+        self.q = PriorityQueue()
+        self.message_dict = {}
+        self.message_i = 0
 
         ## Storing a view of chain state for our liveness checks
         self.block_height = 0
@@ -45,30 +16,40 @@ class MessageQueue:
     def run(self):
         count = 0
         while True:
-            (node, message) = self.q.get()
-            self.process_message(node, message)
+            assert not self.q.empty(), "Empty queue!  Program stuck"
+            (ts, node_id, message_i) = self.q.get()
+            # Might be a scheduled message - need to wait for those
+            now = time.time()
+            if now < ts:
+                time.sleep(ts - now)
+            message = self.message_dict.pop(message_i)
+            self.process_message(node_id, message)
             time.sleep(0.01)
             count += 1
             if count % 100 == 0:
                 self.safety_check()
                 self.liveness_check()
 
-    def send_message(self, node, message):
+    def send_message(self, node_id, message):
         """
         Just adds it to queue
         """
-        self.q.put(node, message, 0)
+        self.message_dict[self.message_i] = message
+        # prioritize scheduled messages that are due to run by using time.time()
+        self.q.put((time.time(), node_id, self.message_i))
+        self.message_i += 1
 
-    def schedule_message(self, node, message, scheduled_time):
+    def schedule_message(self, node_id, message, scheduled_time):
         """
         We're using single module for both message queue and scheduler
         This method should be implemented on any other scheduler
         """
-        self.q.put(node, message, scheduled_time)
+        self.message_dict[self.message_i] = message
+        self.q.put((scheduled_time, node_id, self.message_i))
+        self.message_i += 1
 
-    def process_message(self, node, message):
-        # print("PROCESS", node, message)
-        self.nodes[node].process_message(message)
+    def process_message(self, node_id, message):
+        self.nodes[node_id].process_message(message)
 
     def safety_check(self):
         """
@@ -88,9 +69,6 @@ class MessageQueue:
                 for x in self.nodes:
                     self.nodes[x].print_blocks()
                 for dec in dec_all:
-                    # matches = [
-                    #     x.node_id for x in self.nodes if x.decision.get(i, None) == dec
-                    # ]
                     matches = {
                         self.nodes[i].node_id
                         for i in self.nodes
@@ -109,7 +87,11 @@ class MessageQueue:
 
         new_blocks = block_height - self.block_height
         rounds_passed = round - self.round
-        if new_blocks == 0 and rounds_passed > len(self.nodes):
+        # Check will only work if we have at least as many "rounds_passed" as
+        # we have nodes
+        if rounds_passed < len(self.nodes):
+            return
+        if new_blocks == 0:
             print("####### LIVENESS VIOLATION!!! #######")
             raise Exception("Liveness Violation!")
 
