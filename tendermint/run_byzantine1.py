@@ -141,12 +141,12 @@ class TendermintNodeByzantineCollude(algorithm.TendermintNode):
 
 n = 4
 nodes = {}
-mq = message_queue.MessageQueue(nodes)
 
 
 byzantine_nodes = {2, 3}
-round_time = 0.5
+round_time = 1
 
+mq = message_queue.MessageQueue(nodes, round_time)
 collusion_tracker = CollusionTracker(byzantine_nodes)
 
 for i in range(n):

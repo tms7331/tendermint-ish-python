@@ -4,9 +4,9 @@ import message_queue
 n = 4
 
 nodes = {}
-mq = message_queue.MessageQueue(nodes)
 
 round_time = 1
+mq = message_queue.MessageQueue(nodes, round_time)
 
 for i in range(n):
     verbose = True if i == 0 else False
