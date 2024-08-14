@@ -1,5 +1,3 @@
-# https://arxiv.org/pdf/1807.04938
-# https://timroughgarden.github.io/fob21/l/l7.pdf
 import time
 import zlib
 import string
@@ -42,7 +40,7 @@ class TendermintNode:
         self.valid_value = NIL
         self.valid_round = -1
 
-        ##########
+        ### Below this point are variables not from the pseudocode
         self.node_id = node_id
         self.num_nodes = num_nodes
         self.round_time = round_time
@@ -66,7 +64,7 @@ class TendermintNode:
         self.verbose = verbose
 
     def print_blocks(self):
-        blocks = [self.decision.get(i) for i in range(self.h)]
+        blocks = [self.decision.get(i) for i in range(self.h) if self.decision.get(i)]
         print(f"{self.node_id} BLOCKS: {blocks}")
 
     def add_peer(self, peer_id):
@@ -81,7 +79,7 @@ class TendermintNode:
         all to all communication
         """
         if self.verbose:
-            print(self.node_id, "sending:", msg)
+            print(self.node_id, "broadcasting:", msg)
         for to_node_id in self.peers:
             # copying messages so we can pop the msg_type
             self.message_queue.send_message(to_node_id, dict(msg))
@@ -187,7 +185,6 @@ class TendermintNode:
             "round": round,
         }
         timeout_time = self.start_time + (round + 1) * self.round_time
-        assert timeout_time > time.time()
         self.schedule(msg, timeout_time)
 
     def schedule_ontimeout_prevote(self, h, round):
@@ -213,7 +210,7 @@ class TendermintNode:
         ## lines 11-21
         """
         if self.verbose:
-            print(f"\n{self.node_id} --- STRTING ROUND {round}")
+            print(f"\n{self.node_id} --- STARTING ROUND {round}")
         self.round = round
         self.step = "propose"
 
@@ -239,13 +236,17 @@ class TendermintNode:
     def handle_proposal(self, sender, h, round, proposal, valid_round):
         ## lines 22-27
         assert sender == self.proposer(h, round)
-
         assert (
             h,
             round,
         ) not in self.proposals, f"Shouldn't receive multiple proposals! Round {round}, TO {self.node_id} FROM {sender}"
         self.proposals[(h, round)] = {"proposal": proposal, "valid_round": valid_round}
-        if valid_round == -1:
+        # Think there's a pseudocode error on line 22
+        # upon <PROPOSAL, h_p, round_p , v, −1>
+        # Last value should be *, condition below (locked_round == -1 or locked_value_p==v)
+        # Only makes sense in this scenario
+        # if valid_round == -1:
+        if self.round == round:
             if self.valid(proposal) and (
                 self.locked_round == -1 or self.locked_value == proposal
             ):
@@ -265,13 +266,9 @@ class TendermintNode:
         have_qc, qc_idv = self._tally_votes(self.prevotes[(h, round)])
 
         ## lines 28-33
-
-        """
-        Is this to handle scenario where we are behind a round?
-        If we see proposal for a different round we won't prevote in response
-        to the proposal, but if enough people vote we can be overruled?
-        """
-
+        # Is this to handle scenario where we are behind a round?
+        # If we see proposal for a different round we won't prevote in response
+        # to the proposal, but if enough people vote we can be overruled?
         if have_qc and self.step == "propose":
             valid_round = self.proposals[(h, round)]["valid_round"]
             proposal = self.proposals[(h, round)]["proposal"]
@@ -289,7 +286,8 @@ class TendermintNode:
             # Upon 2f+1
             # By checking for exact count we'll only do it once!
             if num_prevotes == (2 * self.f + 1):
-                self.schedule_ontimeout_prevote(h, round)
+                # TODO - not clear if this should be self.h
+                self.schedule_ontimeout_prevote(self.h, round)
 
         ## lines 36-43
         if have_qc and self.step in {"prevote", "precommit"}:
@@ -323,7 +321,6 @@ class TendermintNode:
         assert (
             sender not in self.precommits[(h, round)]
         ), f"Shouldn't receive multiple prevotes! Round {round}, TO {self.node_id} FROM {sender}"
-
         self.precommits[(h, round)][sender] = id_v
         num_precommits = len(self.precommits[(h, round)])
         have_qc, qc_idv = self._tally_votes(self.precommits[(h, round)])
@@ -331,10 +328,19 @@ class TendermintNode:
         # Upon 2f+1 votes
         # Only do it once!
         if num_precommits == (2 * self.f + 1):
-            self.schedule_ontimeout_precommit(h, round)
+            # TODO - Not clear if this should be self.h
+            # self.schedule_ontimeout_precommit(self.h, round)
+            self.schedule_ontimeout_precommit(self.h, round)
 
+        # TODO - explain deviation here
+        # Pseudocode shows if have_qc and self.decision.get(h, NIL) == NIL
+        # but We need some handling for scenario: m one node got preocmmit QC
+        # 1 node gets a precommit QC
+        # byzantine nodes
+        # We know it must be next block...
+
+        proposal = self.proposals[(h, round)]["proposal"]
         if have_qc and self.decision.get(h, NIL) == NIL:
-            proposal = self.proposals[(h, round)]["proposal"]
             # Make sure it matches what we have for our proposal
             if self.valid(proposal) and qc_idv == self.id_(proposal):
                 if self.verbose:
@@ -347,6 +353,25 @@ class TendermintNode:
                 self.valid_round = -1
                 self.valid_value = NIL
                 self.start_round(round + 1)
+
+        # TODO - explain this, Not in pseudocode but necessary to handle scenarios
+        if round == self.round and have_qc and self.decision.get(h, NIL) == proposal:
+            # Make sure it matches what we have for our proposal
+            assert self.valid(proposal) and qc_idv == self.id_(proposal)
+            if self.verbose:
+                self.print_blocks()
+
+            # Do NOT want to increment
+            # self.decision[h] = proposal
+            # self.h += 1
+            # Note - this could fail if a node falls behind
+            # TODO - think carefully about this...
+            # assert self.h == len(self.decision) + 1
+            self.locked_round = -1
+            self.locked_value = NIL
+            self.valid_round = -1
+            self.valid_value = NIL
+            self.start_round(round + 1)
 
         ##  lines 55-59
         # If we start getting votes for future round, we need to start it!

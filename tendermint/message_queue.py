@@ -3,7 +3,7 @@ from queue import PriorityQueue
 
 
 class MessageQueue:
-    def __init__(self, nodes):
+    def __init__(self, nodes, round_time):
         self.nodes = nodes
         self.q = PriorityQueue()
         self.message_dict = {}
@@ -12,6 +12,10 @@ class MessageQueue:
         ## Storing a view of chain state for our liveness checks
         self.block_height = 0
         self.round = 0
+        ## Store round_time so we can schedule messages in a way that makes
+        # for pretty printing
+        self.start_time = time.time()
+        self.round_time = round_time
 
     def run(self):
         count = 0
@@ -24,7 +28,6 @@ class MessageQueue:
                 time.sleep(ts - now)
             message = self.message_dict.pop(message_i)
             self.process_message(node_id, message)
-            time.sleep(0.01)
             count += 1
             if count % 100 == 0:
                 self.safety_check()
@@ -35,8 +38,13 @@ class MessageQueue:
         Just adds it to queue
         """
         self.message_dict[self.message_i] = message
-        # prioritize scheduled messages that are due to run by using time.time()
-        self.q.put((time.time(), node_id, self.message_i))
+        # This logic prevents it from racing ahead to the next block once a block
+        # is built, not sure this is what happens in real tendermint but it's
+        # helpful for pretty printing output
+        scheduled_time = max(
+            time.time(), self.start_time + (message["round"]) * self.round_time
+        )
+        self.q.put((scheduled_time, node_id, self.message_i))
         self.message_i += 1
 
     def schedule_message(self, node_id, message, scheduled_time):
@@ -55,16 +63,19 @@ class MessageQueue:
         """
         Make sure no nodes have different values (blocks) for any block height
         """
-        # Every node should generally be on the same round, and 'round' upper bounds height
+        # Every node should generally be on the same round, and 'round' upper
+        # bounds height
         round = self.nodes[0].round
         for i in range(0, round):
-            decisions = {self.nodes[x].decision.get(i, None) for x in self.nodes}
             # It's ok if some blocks have fallen behind and have NIL/None
-            if None in decisions:
-                decisions.remove(None)
+            decisions = {
+                self.nodes[x].decision.get(i, None)
+                for x in self.nodes
+                if self.nodes[x].decision.get(i, None)
+            }
             if len(decisions) > 1:
                 dec_all = list(decisions)
-                print("####### SAFETY VIOLATION!!! #######")
+                print("\n####### SAFETY VIOLATION!!! #######")
                 # First print all blocks, then print specific information about violation
                 for x in self.nodes:
                     self.nodes[x].print_blocks()
@@ -79,8 +90,9 @@ class MessageQueue:
 
     def liveness_check(self):
         """
-        If we went go through every node as a proposer and no block was created, we'll
-        call it a liveness violation (even though in reality it's more subtle than this)
+        If we went go through every node as a proposer and no block was created,
+        we'll call it a liveness violation (even though in reality I think
+        it's more subtle than this)
         """
         block_height = max([len(self.nodes[x].decision) for x in self.nodes])
         round = max([self.nodes[x].round for x in self.nodes])
@@ -92,7 +104,7 @@ class MessageQueue:
         if rounds_passed < len(self.nodes):
             return
         if new_blocks == 0:
-            print("####### LIVENESS VIOLATION!!! #######")
+            print("\n####### LIVENESS VIOLATION!!! #######")
             raise Exception("Liveness Violation!")
 
         self.block_height = block_height
