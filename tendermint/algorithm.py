@@ -45,7 +45,7 @@ class TendermintNode:
         self.num_nodes = num_nodes
         self.round_time = round_time
         self.start_time = time.time()
-        # From the paper: "for simplicity we present the algorithm for the case n = 3f + 1"
+        # "for simplicity we present the algorithm for the case n = 3f + 1"
         self.f = (num_nodes - 1) / 3
         assert self.f == int(self.f), "(num_nodes-1) must be divisble by 3!"
         self.message_queue = message_queue
@@ -225,7 +225,7 @@ class TendermintNode:
 
             # In addition to the value proposed, the PROPOSAL message also contains
             # the validRound so other processes are informed about the last round
-            # in which the proposer observed validV alue as a possible decision value.
+            # in which the proposer observed validValue as a possible decision value.
             self.broadcast_proposal(self.h, round, proposal, self.valid_round)
             # Note that when we broadcast_proposal, it will call a function
             # to prevote for this value
@@ -243,9 +243,9 @@ class TendermintNode:
         self.proposals[(h, round)] = {"proposal": proposal, "valid_round": valid_round}
         # Think there's a pseudocode error on line 22
         # upon <PROPOSAL, h_p, round_p , v, −1>
-        # Last value should be *, condition below (locked_round == -1 or locked_value_p==v)
-        # Only makes sense in this scenario
-        # if valid_round == -1:
+        # The last value should be *, not -1
+        # The condition below (locked_round == -1 or locked_value_p==v)
+        # Only makes sense if this is the case
         if self.round == round:
             if self.valid(proposal) and (
                 self.locked_round == -1 or self.locked_value == proposal
@@ -257,6 +257,7 @@ class TendermintNode:
 
     def handle_prevote(self, sender, h, round, id_v):
         ## lines 34-35
+        # Honest nodes should vote at most once in any referendum
         assert (
             sender not in self.prevotes[(h, round)]
         ), f"Shouldn't receive multiple prevotes! Round {round}, TO {self.node_id} FROM {sender}"
@@ -266,12 +267,10 @@ class TendermintNode:
         have_qc, qc_idv = self._tally_votes(self.prevotes[(h, round)])
 
         ## lines 28-33
-        # Is this to handle scenario where we are behind a round?
-        # If we see proposal for a different round we won't prevote in response
-        # to the proposal, but if enough people vote we can be overruled?
         if have_qc and self.step == "propose":
             valid_round = self.proposals[(h, round)]["valid_round"]
             proposal = self.proposals[(h, round)]["proposal"]
+            # 'valid_round' will be the round in which they locked this value
             if valid_round >= 0 and valid_round < self.round:
                 if self.valid(proposal) and (
                     self.locked_round <= valid_round or self.locked_value == proposal
@@ -287,7 +286,7 @@ class TendermintNode:
             # By checking for exact count we'll only do it once!
             if num_prevotes == (2 * self.f + 1):
                 # TODO - not clear if this should be self.h
-                self.schedule_ontimeout_prevote(self.h, round)
+                self.schedule_ontimeout_prevote(h, round)
 
         ## lines 36-43
         if have_qc and self.step in {"prevote", "precommit"}:
@@ -301,7 +300,6 @@ class TendermintNode:
                 self.valid_value = proposal
                 self.valid_round = round
 
-        # TODO - think we could broadcast twice?
         ## lines 44-46
         if self.step == "prevote" and have_qc and qc_idv == NIL:
             self.broadcast_precommit(h, round, NIL)
@@ -316,8 +314,7 @@ class TendermintNode:
         """
         ## lines 49-55
         """
-        # Can they ever vote more than once in a round?
-        # Should we add assertion that they haven't voted yet?
+        # Honest nodes should vote at most once in any referendum
         assert (
             sender not in self.precommits[(h, round)]
         ), f"Shouldn't receive multiple prevotes! Round {round}, TO {self.node_id} FROM {sender}"
@@ -328,22 +325,17 @@ class TendermintNode:
         # Upon 2f+1 votes
         # Only do it once!
         if num_precommits == (2 * self.f + 1):
-            # TODO - Not clear if this should be self.h
             # self.schedule_ontimeout_precommit(self.h, round)
             self.schedule_ontimeout_precommit(self.h, round)
-
-        # TODO - explain deviation here
-        # Pseudocode shows if have_qc and self.decision.get(h, NIL) == NIL
-        # but We need some handling for scenario: m one node got preocmmit QC
-        # 1 node gets a precommit QC
-        # byzantine nodes
-        # We know it must be next block...
 
         proposal = self.proposals[(h, round)]["proposal"]
         if have_qc and self.decision.get(h, NIL) == NIL:
             # Make sure it matches what we have for our proposal
             if self.valid(proposal) and qc_idv == self.id_(proposal):
                 if self.verbose:
+                    print(
+                        f"BUILT PRECOMMIT QC FOR BLOCK {proposal} AT HEIGHT {h} IN ROUND {round} "
+                    )
                     self.print_blocks()
 
                 self.decision[h] = proposal
@@ -354,19 +346,25 @@ class TendermintNode:
                 self.valid_value = NIL
                 self.start_round(round + 1)
 
-        # TODO - explain this, Not in pseudocode but necessary to handle scenarios
+        # This is not in pseudocode but necessary to handle scenarios where a
+        # subset of nodes see a precommit QC.
+        # For example: 10 nodes, all honest.  5 saw precommit QC, 5 didn't. It's
+        # not possible for the "didn't" nodes to rebuild block h in round r+1
+        # if the "saw" nodes vote NIL, and it's definitely not possible for the
+        # "saw" nodes to build block h+1 in round r+1 as the "didn't" nodes need
+        # to build block h first.  By allowing nodes to rebuild the QC for h in
+        # in a new round we handle this scenario.
+        # An alternative approach would be to broadcast full QCs if a node sees
+        # a block being proposed that they already have a QC for.
         if round == self.round and have_qc and self.decision.get(h, NIL) == proposal:
             # Make sure it matches what we have for our proposal
             assert self.valid(proposal) and qc_idv == self.id_(proposal)
             if self.verbose:
                 self.print_blocks()
 
-            # Do NOT want to increment
-            # self.decision[h] = proposal
-            # self.h += 1
-            # Note - this could fail if a node falls behind
-            # TODO - think carefully about this...
-            # assert self.h == len(self.decision) + 1
+            # Is it safe to reset these?  Are there edge cases where we
+            # could have locked on a different block but voted here, and
+            # we don't want to clear these out?
             self.locked_round = -1
             self.locked_value = NIL
             self.valid_round = -1
