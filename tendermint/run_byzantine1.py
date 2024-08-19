@@ -4,8 +4,8 @@ import message_queue
 """
 SAFETY FAILURE EXAMPLE
 Nodes can collude - when it's a byzantine's node to propose, send different
-proposals to 1/2 of the nodes.  All byzantine nodes vote for those same proposals
-to the same nodes
+proposals to 1/2 of the nodes (equivocation).  All byzantine nodes vote for those 
+same proposals to the same nodes in prevote and precommit voting rounds.
 """
 
 
